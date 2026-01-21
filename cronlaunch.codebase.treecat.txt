@@ -1,0 +1,1380 @@
+Cargo.lock
+Cargo.toml
+CONTRIBUTING.md
+cronlaunch.codebase.treecat.txt
+LICENSE.md
+README.md
+src
+target
+tests
+Cargo.toml:
+[package]
+name = "cronlaunch"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "Simplified LaunchAgents management for macOS using crontab-like syntax."
+authors = ["Nels Nelson <nels@nelsnelson.org>"]
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "6.0"
+env_logger = "0.11"
+log = "0.4"
+plist = "1.7"
+thiserror = "1.0"
+which = "6.0"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "symbols"
+
+[[bin]]
+name = "cronl"
+path = "src/bin/cronl.rs"
+
+[[bin]]
+name = "watchl"
+path = "src/bin/watchl.rs"
+
+[[bin]]
+name = "loginl"
+path = "src/bin/loginl.rs"
+
+
+README.md:
+Yep - with the Clap changes you made, it’s best to show the `--` separator anywhere the “handler” might include flags (or just as a consistent habit).
+
+Here’s an updated `README.md` with minimal changes (just fixes + clearer examples).
+
+````md
+# cronlaunch
+
+Simple command-line helpers for managing macOS LaunchAgents in a more Unix-like way.
+
+## Binaries
+
+- `cronl` - create/list/remove scheduled LaunchAgents using a crontab-like string
+- `watchl` - create/list/remove WatchPaths-based LaunchAgents
+- `loginl` - create/list/remove login (RunAtLoad) LaunchAgents
+
+## Examples
+
+```bash
+# Create a cron job
+cronl "0 1 * * * archive.rb ${HOME}/Downloads/archive"
+
+# Show all jobs
+cronl --show-all
+
+# Remove by label
+cronl --remove com.local.archive
+
+# Watch a directory and run a handler when it changes
+watchl ~/Desktop -- ~/.local/usr/bin/desktop.rb
+
+# Watch a directory and run a handler with flags/args
+watchl ~/Downloads -- /usr/bin/python3 -m http.server 8000
+
+# Create a login job (run at login)
+loginl ~/Desktop -- ~/.local/usr/bin/desktop.rb
+```
+
+## Notes
+
+* The LaunchAgents directory is `~/Library/LaunchAgents`.
+* Existing plist files are not overwritten.
+* For `watchl` and `loginl`, using `--` before the handler command is recommended so handler arguments that start with `-` are not parsed as options for `watchl`/`loginl`.
+
+## Project files
+
+A bird's-eye view of the project files:
+
+```
+$ date && tree --gitignore
+Wed Jan 21 10:22:53 CST 2026
+.
+├── CONTRIBUTING.md
+├── Cargo.lock
+├── Cargo.toml
+├── LICENSE.md
+├── README.md
+└── src
+    ├── bin
+    │   ├── cronl.rs
+    │   ├── loginl.rs
+    │   └── watchl.rs
+    ├── core
+    │   ├── constants.rs
+    │   ├── manager.rs
+    │   ├── mod.rs
+    │   ├── plist_io.rs
+    │   └── util.rs
+    └── lib.rs
+
+4 directories, 14 files
+```
+
+src/core/runtime.rs:
+// src/core/runtime.rs
+
+use anyhow::Result;
+use std::path::{Path, PathBuf};
+
+pub trait Runtime: Send + Sync {
+    fn uid(&self) -> u32;
+    fn launch_agents_dir(&self) -> PathBuf;
+
+    fn which(&self, cmd: &str) -> Result<PathBuf>;
+    fn ensure_executable_file(&self, path: &Path) -> Result<()>;
+
+    fn run_command(&self, program: &str, args: &[String]) -> Result<()>;
+}
+src/core/util.rs:
+// src/core/util.rs
+
+use anyhow::{anyhow, Context, Result};
+use libc::geteuid;
+use log::LevelFilter;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub fn init_logging(verbosity: u8) {
+    // env_logger defaults to INFO; more -v -> DEBUG/TRACE.
+    let level = match verbosity {
+        0 => LevelFilter::Info,
+        1 => LevelFilter::Debug,
+        _ => LevelFilter::Trace,
+    };
+
+    let mut builder = env_logger::Builder::from_default_env();
+    builder.filter_level(level);
+    let _ = builder.try_init();
+}
+
+pub fn uid() -> u32 {
+    // Effective UID is what launchctl expects under sudo contexts.
+    unsafe { geteuid() as u32 }
+}
+
+pub fn ensure_executable_in_path(cmd: &str) -> Result<PathBuf> {
+    let path = which::which(cmd).with_context(|| format!("Cannot find executable in PATH: {cmd}"))?;
+    Ok(path)
+}
+
+pub fn ensure_executable_file(path: &Path) -> Result<()> {
+    let md = std::fs::metadata(path)
+        .with_context(|| format!("Cannot stat executable: {}", path.display()))?;
+    if !md.is_file() {
+        return Err(anyhow!("Given path is not a file: {}", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if (md.permissions().mode() & 0o111) == 0 {
+            return Err(anyhow!("Given file is not executable: {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+pub fn run_command(program: &str, args: &[String]) -> Result<()> {
+    log::debug!("Executing: {} {:?}", program, args);
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("Failed to run: {program}"))?;
+    if !status.success() {
+        return Err(anyhow!(
+            "Command failed: {} {:?} (status={})",
+            program,
+            args,
+            status
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn ensure_executable_file_rejects_nonexistent() {
+        let td = TempDir::new().expect("tempdir");
+        let p = td.path().join("nope");
+        let err = ensure_executable_file(&p).unwrap_err();
+        assert!(err.to_string().contains("Cannot stat executable"));
+    }
+
+    #[test]
+    fn ensure_executable_file_rejects_non_executable() {
+        let td = TempDir::new().expect("tempdir");
+        let p = td.path().join("file");
+        fs::write(&p, "hello").expect("write");
+
+        let err = ensure_executable_file(&p).unwrap_err();
+        assert!(err.to_string().contains("not executable") || err.to_string().contains("not executable"));
+    }
+
+    #[test]
+    fn ensure_executable_file_accepts_executable() {
+        let td = TempDir::new().expect("tempdir");
+        let p = td.path().join("exe");
+        fs::write(&p, "#!/bin/sh\necho ok\n").expect("write");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&p).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&p, perms).expect("chmod");
+        }
+
+        ensure_executable_file(&p).expect("should be executable");
+    }
+}
+
+src/core/constants.rs:
+// src/core/constants.rs
+
+use std::path::PathBuf;
+
+/// Namespace prefix used to derive job labels.
+pub const LABEL_NAMESPACE: [&str; 2] = ["com", "local"];
+
+/// Launchd calendar interval keys (mirrors the Ruby constant order).
+pub const INTERVALS: [&str; 5] = ["Minute", "Hour", "Day", "Month", "Weekday"];
+
+/// Special schedule string used when a plist indicates a login job.
+pub const ON_LOGIN: &str = "@login";
+
+/// Default encoding for plist XML generation.
+pub const DEFAULT_ENCODING: &str = "UTF-8";
+
+/// LaunchAgents directory: ~/Library/LaunchAgents
+pub fn launch_agents_dir() -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join("Library").join("LaunchAgents")
+}
+src/core/manager.rs:
+// src/core/manager.rs
+
+use crate::core::constants::{LABEL_NAMESPACE, INTERVALS};
+use crate::core::default_runtime::DefaultRuntime;
+use crate::core::plist_io::{list_plists, parse_job};
+use crate::core::runtime::Runtime;
+use anyhow::{anyhow, Context, Result};
+use plist::{Dictionary, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn derive_label_from_path(path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut parts: Vec<&str> = LABEL_NAMESPACE.to_vec();
+    parts.push(&stem);
+    parts.join(".")
+}
+
+fn build_env_vars() -> Option<Value> {
+    if let Ok(p) = std::env::var("PATH") {
+        if !p.trim().is_empty() {
+            let mut d = Dictionary::new();
+            d.insert("PATH".to_string(), Value::String(p));
+            return Some(Value::Dictionary(d));
+        }
+    }
+    None
+}
+
+fn program_or_args(argv: &[String]) -> (String, Value) {
+    if argv.len() == 1 {
+        ("Program".to_string(), Value::String(argv[0].clone()))
+    } else {
+        (
+            "ProgramArguments".to_string(),
+            Value::Array(argv.iter().cloned().map(Value::String).collect()),
+        )
+    }
+}
+
+fn split_schedule_and_command(crontab: &str) -> Result<(String, Vec<String>)> {
+    let parts: Vec<String> = crontab
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+
+    if parts.len() < INTERVALS.len() + 1 {
+        return Err(anyhow!(
+            "Invalid crontab string: expected {} schedule parts plus a command",
+            INTERVALS.len()
+        ));
+    }
+
+    let schedule = parts[..INTERVALS.len()].join(" ");
+    let command_parts = parts[INTERVALS.len()..].to_vec();
+    Ok((schedule, command_parts))
+}
+
+fn parse_calendar_interval(schedule: &str) -> Result<Value> {
+    let mut interval_dict = Dictionary::new();
+    let fields: Vec<&str> = schedule.split_whitespace().collect();
+
+    if fields.len() != INTERVALS.len() {
+        return Err(anyhow!(
+            "Invalid cron schedule: expected {} parts, got {}",
+            INTERVALS.len(),
+            fields.len()
+        ));
+    }
+
+    for (k, v) in INTERVALS.iter().zip(fields.iter()) {
+        interval_dict.insert((*k).to_string(), Value::String((*v).to_string()));
+    }
+
+    Ok(Value::Dictionary(interval_dict))
+}
+
+pub struct LaunchAgentManager<R: Runtime> {
+    rt: R,
+}
+
+impl Default for LaunchAgentManager<DefaultRuntime> {
+    fn default() -> Self {
+        Self { rt: DefaultRuntime }
+    }
+}
+
+impl<R: Runtime> LaunchAgentManager<R> {
+    pub fn new(rt: R) -> Self {
+        Self { rt }
+    }
+
+    pub fn show_all(&self) -> Result<()> {
+        for p in list_plists()? {
+            let job = parse_job(&p)?;
+            if job.command.trim().is_empty() {
+                println!("@disabled {}", p.display());
+            } else {
+                println!("{} {}", job.schedule, job.command);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn list_labels(&self, filter_watchers_only: bool, filter_login_only: bool) -> Result<()> {
+        for p in list_plists()? {
+            let job = parse_job(&p)?;
+            if filter_watchers_only && job.watch_paths.is_empty() {
+                continue;
+            }
+            if filter_login_only && !job.is_login {
+                continue;
+            }
+            println!("{}", job.label);
+        }
+        Ok(())
+    }
+
+    pub fn remove(&self, label: &str) -> Result<()> {
+        let plist_path = self
+            .rt
+            .launch_agents_dir()
+            .join(format!("{label}.plist"));
+        if !plist_path.exists() {
+            eprintln!("Not found; crontab or launch agent: {label}");
+            return Ok(());
+        }
+
+        let uid = self.rt.uid();
+
+        self.rt
+            .run_command(
+                "launchctl",
+                &[
+                    "bootout".to_string(),
+                    format!("gui/{uid}/{label}"),
+                ],
+            )
+            .ok();
+
+        self.rt
+            .run_command(
+                "launchctl",
+                &[
+                    "remove".to_string(),
+                    format!("gui/{uid}/{label}"),
+                ],
+            )
+            .ok();
+
+        fs::remove_file(&plist_path)
+            .with_context(|| format!("Failed to remove plist: {}", plist_path.display()))?;
+
+        println!("Removed launch agent: {label}");
+        Ok(())
+    }
+
+    /// Existing API: a single string containing schedule + command.
+    pub fn create_cron(&self, crontab: &str) -> Result<()> {
+        let (schedule, command_parts) = split_schedule_and_command(crontab)?;
+        self.create_cron_parts(&schedule, &command_parts)
+    }
+
+    /// New API: schedule and handler argv split (easy to test and matches `--` CLI).
+    pub fn create_cron_parts(&self, schedule: &str, handler_argv: &[String]) -> Result<()> {
+        let argv = self.extract_program_path(handler_argv)?;
+
+        let exe_path = PathBuf::from(&argv[0]);
+        let label = derive_label_from_path(&exe_path);
+
+        let mut root = Dictionary::new();
+        root.insert("Label".to_string(), Value::String(label.clone()));
+        root.insert(
+            "StartCalendarInterval".to_string(),
+            parse_calendar_interval(schedule)?,
+        );
+
+        if let Some(env) = build_env_vars() {
+            root.insert("EnvironmentVariables".to_string(), env);
+        }
+
+        let (k, v) = program_or_args(&argv);
+        root.insert(k, v);
+
+        let plist_path = self.save_plist(&label, Value::Dictionary(root))?;
+        self.bootstrap(&plist_path)?;
+        println!("Created and enabled launchd job: {label}");
+        Ok(())
+    }
+
+    pub fn create_watch(&self, watch_paths: &[PathBuf], handler_argv: &[String]) -> Result<()> {
+        if watch_paths.is_empty() {
+            return Err(anyhow!("A watch path is required"));
+        }
+        for p in watch_paths {
+            if !p.exists() || !p.is_dir() {
+                return Err(anyhow!("Directory not found: {}", p.display()));
+            }
+        }
+
+        let argv = self.extract_program_path(handler_argv)?;
+        let label = derive_label_from_path(&watch_paths[0]);
+
+        let mut root = Dictionary::new();
+        root.insert("Label".to_string(), Value::String(label.clone()));
+        root.insert(
+            "WatchPaths".to_string(),
+            Value::Array(
+                watch_paths
+                    .iter()
+                    .map(|p| Value::String(p.to_string_lossy().to_string()))
+                    .collect(),
+            ),
+        );
+
+        if let Some(env) = build_env_vars() {
+            root.insert("EnvironmentVariables".to_string(), env);
+        }
+
+        let (k, v) = program_or_args(&argv);
+        root.insert(k, v);
+
+        let plist_path = self.save_plist(&label, Value::Dictionary(root))?;
+        self.bootstrap(&plist_path)?;
+        println!("Created and enabled launchd job: {label}");
+        Ok(())
+    }
+
+    pub fn create_login(&self, label_hint: &Path, handler_argv: &[String]) -> Result<()> {
+        let argv = self.extract_program_path(handler_argv)?;
+        let label = derive_label_from_path(label_hint);
+
+        let mut root = Dictionary::new();
+        root.insert("Label".to_string(), Value::String(label.clone()));
+        root.insert("RunAtLoad".to_string(), Value::Boolean(true));
+
+        if let Some(env) = build_env_vars() {
+            root.insert("EnvironmentVariables".to_string(), env);
+        }
+
+        let (k, v) = program_or_args(&argv);
+        root.insert(k, v);
+
+        let plist_path = self.save_plist(&label, Value::Dictionary(root))?;
+        self.bootstrap(&plist_path)?;
+        println!("Created and enabled launchd job: {label}");
+        Ok(())
+    }
+
+    fn extract_program_path(&self, argv: &[String]) -> Result<Vec<String>> {
+        if argv.is_empty() {
+            return Err(anyhow!("Executable is required"));
+        }
+
+        let first = &argv[0];
+        let exe_path = if first.contains(std::path::MAIN_SEPARATOR) {
+            PathBuf::from(first)
+        } else {
+            self.rt.which(first)?
+        };
+
+        self.rt.ensure_executable_file(&exe_path)?;
+
+        let mut out = vec![exe_path.to_string_lossy().to_string()];
+        out.extend_from_slice(&argv[1..]);
+        Ok(out)
+    }
+
+    fn save_plist(&self, label: &str, value: Value) -> Result<PathBuf> {
+        let dir = self.rt.launch_agents_dir();
+        fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
+
+        let path = dir.join(format!("{label}.plist"));
+        if path.exists() {
+            return Ok(path);
+        }
+
+        plist::to_file_xml(&path, &value)
+            .with_context(|| format!("Failed to write plist: {}", path.display()))?;
+        Ok(path)
+    }
+
+    fn bootstrap(&self, plist_path: &Path) -> Result<()> {
+        let uid = self.rt.uid();
+        self.rt.run_command(
+            "launchctl",
+            &[
+                "bootstrap".to_string(),
+                format!("gui/{uid}"),
+                plist_path.to_string_lossy().to_string(),
+            ],
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LaunchAgentManager;
+    use crate::core::runtime::Runtime;
+    use anyhow::{anyhow, Result};
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    #[derive(Clone)]
+    struct FakeRuntime {
+        dir: PathBuf,
+        commands: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+        which_map: Arc<HashMap<String, PathBuf>>,
+    }
+
+    impl FakeRuntime {
+        fn new(dir: PathBuf) -> Self {
+            Self {
+                dir,
+                commands: Arc::new(Mutex::new(vec![])),
+                which_map: Arc::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl Runtime for FakeRuntime {
+        fn uid(&self) -> u32 {
+            501
+        }
+
+        fn launch_agents_dir(&self) -> PathBuf {
+            self.dir.clone()
+        }
+
+        fn which(&self, cmd: &str) -> Result<PathBuf> {
+            self.which_map
+                .get(cmd)
+                .cloned()
+                .ok_or_else(|| anyhow!("which failed for {cmd}"))
+        }
+
+        fn ensure_executable_file(&self, path: &Path) -> Result<()> {
+            if !path.exists() {
+                return Err(anyhow!("not found"));
+            }
+            Ok(())
+        }
+
+        fn run_command(&self, program: &str, args: &[String]) -> Result<()> {
+            self.commands
+                .lock()
+                .unwrap()
+                .push((program.to_string(), args.to_vec()));
+            Ok(())
+        }
+    }
+
+    fn make_exe(td: &TempDir, name: &str) -> PathBuf {
+        let p = td.path().join(name);
+        fs::write(&p, "#!/bin/sh\necho ok\n").expect("write exe");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&p).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&p, perms).unwrap();
+        }
+        p
+    }
+
+    #[test]
+    fn create_cron_writes_plist_and_bootstraps() {
+        let td = TempDir::new().unwrap();
+        let agents_dir = td.path().join("Library").join("LaunchAgents");
+        let exe = make_exe(&td, "archive.rb");
+
+        let rt = FakeRuntime::new(agents_dir.clone());
+        let mgr = LaunchAgentManager::new(rt.clone());
+
+        let schedule = "0 1 * * *";
+        let handler = vec![exe.to_string_lossy().to_string(), "/tmp/out".to_string()];
+
+        mgr.create_cron_parts(schedule, &handler).unwrap();
+
+        // plist exists
+        let label = "com.local.archive";
+        let plist_path = agents_dir.join(format!("{label}.plist"));
+        assert!(plist_path.exists());
+
+        // launchctl bootstrap called
+        let cmds = rt.commands.lock().unwrap().clone();
+        assert!(cmds.iter().any(|(p, a)| {
+            p == "launchctl"
+                && a.get(0).map(|s| s.as_str()) == Some("bootstrap")
+                && a.iter().any(|x| x.contains("gui/"))
+        }));
+    }
+}
+src/core/mod.rs:
+// src/core/mod.rs
+
+pub mod constants;
+pub mod default_runtime;
+pub mod manager;
+pub mod plist_io;
+pub mod runtime;
+pub mod util;
+src/core/default_runtime.rs:
+// src/core/default_runtime.rs
+
+use crate::core::constants::launch_agents_dir;
+use crate::core::runtime::Runtime;
+use crate::core::util::{ensure_executable_file, ensure_executable_in_path, run_command, uid};
+use anyhow::Result;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DefaultRuntime;
+
+impl Runtime for DefaultRuntime {
+    fn uid(&self) -> u32 {
+        uid()
+    }
+
+    fn launch_agents_dir(&self) -> PathBuf {
+        launch_agents_dir()
+    }
+
+    fn which(&self, cmd: &str) -> Result<PathBuf> {
+        ensure_executable_in_path(cmd)
+    }
+
+    fn ensure_executable_file(&self, path: &Path) -> Result<()> {
+        ensure_executable_file(path)
+    }
+
+    fn run_command(&self, program: &str, args: &[String]) -> Result<()> {
+        run_command(program, args)
+    }
+}
+src/core/plist_io.rs:
+// src/core/plist_io.rs
+
+use crate::core::constants::{launch_agents_dir, INTERVALS, ON_LOGIN};
+use anyhow::{Context, Result};
+use plist::{Dictionary, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub struct ParsedJob {
+    pub label: String,
+    pub schedule: String,
+    pub command: String,
+    pub watch_paths: Vec<String>,
+    pub is_login: bool,
+}
+
+pub fn value_to_pretty_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Boolean(b) => b.to_string(),
+        Value::Integer(i) => i.to_string(),
+        Value::Real(f) => f.to_string(),
+        Value::Date(d) => format!("{d:?}"),
+        Value::Uid(u) => format!("{u:?}"),
+        Value::Array(a) => format!("[{} items]", a.len()),
+        Value::Dictionary(d) => format!("{{{} keys}}", d.len()),
+        Value::Data(bytes) => format!("<data {} bytes>", bytes.len()),
+
+        // plist::Value is #[non_exhaustive], so keep a fallback.
+        other => format!("{other:?}"),
+    }
+}
+
+fn parse_schedule(dict: &Dictionary) -> (String, Vec<String>, bool) {
+    if let Some(Value::Array(paths)) = dict.get("WatchPaths") {
+        let watch_paths: Vec<String> = paths.iter().map(value_to_pretty_string).collect();
+        if !watch_paths.is_empty() {
+            return (watch_paths[0].clone(), watch_paths, false);
+        }
+    }
+
+    // Treat RunAtLoad=true as a login job.
+    if let Some(Value::Boolean(true)) = dict.get("RunAtLoad") {
+        return (ON_LOGIN.to_string(), vec![], true);
+    }
+
+    if let Some(Value::Dictionary(intervals)) = dict.get("StartCalendarInterval") {
+        let parts: Vec<String> = INTERVALS
+            .iter()
+            .map(|k| {
+                intervals
+                    .get(*k)
+                    .map(value_to_pretty_string)
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "*".to_string())
+            })
+            .collect();
+        return (parts.join(" "), vec![], false);
+    }
+
+    (ON_LOGIN.to_string(), vec![], false)
+}
+
+fn parse_command(dict: &Dictionary, label: &str) -> String {
+    if let Some(Value::Array(args)) = dict.get("ProgramArguments") {
+        let parts: Vec<String> = args.iter().map(value_to_pretty_string).collect();
+        if !parts.is_empty() {
+            return parts.join(" ");
+        }
+    }
+    if let Some(v) = dict.get("Program") {
+        let s = value_to_pretty_string(v);
+        if !s.trim().is_empty() {
+            return s;
+        }
+    }
+    label.to_string()
+}
+
+pub fn load_plist(path: &Path) -> Result<Dictionary> {
+    let val = Value::from_file(path).with_context(|| format!("Failed to read plist: {}", path.display()))?;
+    match val {
+        Value::Dictionary(d) => Ok(d),
+        _ => Ok(Dictionary::new()),
+    }
+}
+
+pub fn parse_job(path: &Path) -> Result<ParsedJob> {
+    let dict = load_plist(path)?;
+    let label = dict
+        .get("Label")
+        .map(value_to_pretty_string)
+        .unwrap_or_else(|| path.file_stem().unwrap_or_default().to_string_lossy().to_string());
+    let (schedule, watch_paths, is_login) = parse_schedule(&dict);
+    let command = parse_command(&dict, &label);
+
+    Ok(ParsedJob {
+        label,
+        schedule,
+        command,
+        watch_paths,
+        is_login,
+    })
+}
+
+pub fn list_plists() -> Result<Vec<PathBuf>> {
+    let dir = launch_agents_dir();
+    if !dir.exists() {
+        return Ok(vec![]);
+    }
+    let mut out = vec![];
+    for entry in fs::read_dir(&dir).with_context(|| format!("Failed to read dir: {}", dir.display()))? {
+        let p = entry?.path();
+        if p.extension().map(|e| e == "plist").unwrap_or(false) {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plist::{Dictionary, Value};
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        old_home: Option<std::ffi::OsString>,
+        _td: TempDir,
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            if let Some(old) = self.old_home.take() {
+                std::env::set_var("HOME", old);
+            } else {
+                std::env::remove_var("HOME");
+            }
+            // TempDir cleans itself up here too.
+        }
+    }
+
+    fn set_temp_home() -> HomeGuard {
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+
+        let td = TempDir::new().expect("tempdir");
+        let old_home = std::env::var_os("HOME");
+
+        std::env::set_var("HOME", td.path());
+
+        HomeGuard {
+            _lock: lock,
+            old_home,
+            _td: td,
+        }
+    }
+
+    fn write_plist(label: &str, dict: Dictionary) -> PathBuf {
+        let path = launch_agents_dir().join(format!("{label}.plist"));
+        fs::create_dir_all(path.parent().expect("parent dir")).expect("mkdir");
+        plist::to_file_xml(&path, &Value::Dictionary(dict)).expect("write plist");
+        path
+    }
+
+    #[test]
+    fn value_to_pretty_string_string() {
+        let v = Value::String("hello".to_string());
+        assert_eq!(value_to_pretty_string(&v), "hello");
+    }
+
+    #[test]
+    fn parse_job_calendar_interval_program_arguments() {
+        let _home = set_temp_home();
+
+        let mut intervals = Dictionary::new();
+        intervals.insert("Minute".to_string(), Value::String("0".to_string()));
+        intervals.insert("Hour".to_string(), Value::String("1".to_string()));
+        intervals.insert("Day".to_string(), Value::String("*".to_string()));
+        intervals.insert("Month".to_string(), Value::String("*".to_string()));
+        intervals.insert("Weekday".to_string(), Value::String("*".to_string()));
+
+        let mut d = Dictionary::new();
+        d.insert("Label".to_string(), Value::String("com.local.testjob".to_string()));
+        d.insert(
+            "StartCalendarInterval".to_string(),
+            Value::Dictionary(intervals),
+        );
+        d.insert(
+            "ProgramArguments".to_string(),
+            Value::Array(vec![
+                Value::String("/bin/echo".to_string()),
+                Value::String("hello".to_string()),
+            ]),
+        );
+
+        let path = write_plist("com.local.testjob", d);
+        let job = parse_job(&path).expect("parse_job");
+
+        assert_eq!(job.label, "com.local.testjob");
+        assert_eq!(job.schedule, "0 1 * * *");
+        assert_eq!(job.command, "/bin/echo hello");
+        assert!(job.watch_paths.is_empty());
+        assert!(!job.is_login);
+    }
+
+    #[test]
+    fn parse_job_watch_paths_program() {
+        let _home = set_temp_home();
+
+        let mut d = Dictionary::new();
+        d.insert("Label".to_string(), Value::String("com.local.watch".to_string()));
+        d.insert(
+            "WatchPaths".to_string(),
+            Value::Array(vec![
+                Value::String("/tmp/a".to_string()),
+                Value::String("/tmp/b".to_string()),
+            ]),
+        );
+        d.insert("Program".to_string(), Value::String("/usr/bin/true".to_string()));
+
+        let path = write_plist("com.local.watch", d);
+        let job = parse_job(&path).expect("parse_job");
+
+        // For WatchPaths jobs, schedule becomes the first watch path.
+        assert_eq!(job.schedule, "/tmp/a");
+        assert_eq!(job.watch_paths, vec!["/tmp/a".to_string(), "/tmp/b".to_string()]);
+        assert_eq!(job.command, "/usr/bin/true");
+        assert!(!job.is_login);
+    }
+
+    #[test]
+    fn parse_job_login_run_at_load() {
+        let _home = set_temp_home();
+
+        let mut d = Dictionary::new();
+        d.insert("Label".to_string(), Value::String("com.local.login".to_string()));
+        d.insert("RunAtLoad".to_string(), Value::Boolean(true));
+        d.insert(
+            "ProgramArguments".to_string(),
+            Value::Array(vec![Value::String("/bin/echo".to_string())]),
+        );
+
+        let path = write_plist("com.local.login", d);
+        let job = parse_job(&path).expect("parse_job");
+
+        assert_eq!(job.label, "com.local.login");
+        assert_eq!(job.schedule, ON_LOGIN);
+        assert_eq!(job.command, "/bin/echo");
+        assert!(job.is_login);
+    }
+
+    #[test]
+    fn list_plists_only_returns_plist_files() {
+        let _home = set_temp_home();
+
+        // One plist
+        let mut d = Dictionary::new();
+        d.insert("Label".to_string(), Value::String("com.local.one".to_string()));
+        let _p = write_plist("com.local.one", d);
+
+        // One non-plist file in same directory
+        let dir = launch_agents_dir();
+        fs::create_dir_all(&dir).expect("mkdir");
+        fs::write(dir.join("not_a_plist.txt"), "hello").expect("write");
+
+        let plists = list_plists().expect("list_plists");
+        assert!(plists.iter().any(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy() == "com.local.one.plist")
+                .unwrap_or(false)
+        }));
+        assert!(!plists.iter().any(|p| p.file_name().unwrap() == "not_a_plist.txt"));
+    }
+}
+
+src/bin/cronl.rs:
+// src/bin/cronl.rs
+
+use clap::Parser;
+
+use cronlaunch::core::manager::LaunchAgentManager;
+use cronlaunch::core::util::init_logging;
+
+/// Manage launch agents on macOS with a crontab-like syntax.
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Show all jobs
+    #[arg(long)]
+    show_all: bool,
+
+    /// List job labels
+    #[arg(short, long)]
+    list: bool,
+
+    /// Remove a job by label
+    #[arg(short, long)]
+    remove: Option<String>,
+
+    /// Increase verbosity (-v, -vv)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// Crontab-like schedule string, e.g. "0 1 * * *"
+    #[arg(
+        value_name = "SCHEDULE",
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    crontab: Option<String>,
+
+    /// Handler program and args (must come after `--`)
+    #[arg(
+        value_name = "HANDLER",
+        num_args = 1..,
+        last = true,
+        allow_hyphen_values = true,
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    handler: Vec<String>,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    init_logging(args.verbose);
+
+    let mgr = LaunchAgentManager::default();
+
+    if args.show_all {
+        mgr.show_all()?;
+        return Ok(());
+    }
+    if args.list {
+        mgr.list_labels(false, false)?;
+        return Ok(());
+    }
+    if let Some(label) = args.remove.as_deref() {
+        mgr.remove(label)?;
+        return Ok(());
+    }
+
+    let crontab = args
+        .crontab
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("A crontab definition is required"))?;
+    mgr.create_cron_parts(crontab, &args.handler)
+}
+src/bin/watchl.rs:
+// src/bin/watchl.rs
+
+use clap::Parser;
+use std::path::PathBuf;
+
+use cronlaunch::core::manager::LaunchAgentManager;
+use cronlaunch::core::util::init_logging;
+
+/// Manage WatchPaths-based launch agents on macOS.
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Show watchers
+    #[arg(long)]
+    show_all: bool,
+
+    /// List watcher labels
+    #[arg(short, long)]
+    list: bool,
+
+    /// Remove a watcher by label
+    #[arg(short, long)]
+    remove: Option<String>,
+
+    /// Increase verbosity (-v, -vv)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// One or more directories to watch (positional)
+    #[arg(
+        value_name = "WATCH_PATH",
+        num_args = 1..,
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    watch_path: Vec<PathBuf>,
+
+    /// Handler program and args (positional)
+    #[arg(
+        value_name = "HANDLER",
+        num_args = 1..,
+        last = true,
+        allow_hyphen_values = true,
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    handler: Vec<String>,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    init_logging(args.verbose);
+
+    let mgr = LaunchAgentManager::default();
+
+    if args.show_all {
+        mgr.show_all()?;
+        return Ok(());
+    }
+    if args.list {
+        mgr.list_labels(true, false)?;
+        return Ok(());
+    }
+    if let Some(label) = args.remove.as_deref() {
+        mgr.remove(label)?;
+        return Ok(());
+    }
+
+    if args.watch_path.is_empty() || args.handler.is_empty() {
+        anyhow::bail!("A directory and executable handler is required");
+    }
+
+    mgr.create_watch(&args.watch_path, &args.handler)
+}
+src/bin/loginl.rs:
+// src/bin/loginl.rs
+
+use clap::Parser;
+use std::path::PathBuf;
+
+use cronlaunch::core::manager::LaunchAgentManager;
+use cronlaunch::core::util::init_logging;
+
+/// Manage login (RunAtLoad) launch agents on macOS.
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    /// Show login jobs
+    #[arg(long)]
+    show_all: bool,
+
+    /// List login job labels
+    #[arg(short, long)]
+    list: bool,
+
+    /// Remove a login job by label
+    #[arg(short, long)]
+    remove: Option<String>,
+
+    /// Increase verbosity (-v, -vv)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// A path used only to derive the label (positional)
+    #[arg(
+        value_name = "LABEL_PATH",
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    label_path: Option<PathBuf>,
+
+    /// Handler program and args (positional, recommended after `--`)
+    #[arg(
+        value_name = "HANDLER",
+        num_args = 1..,
+        last = true,
+        allow_hyphen_values = true,
+        required_unless_present_any = ["show_all", "list", "remove"]
+    )]
+    handler: Vec<String>,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    init_logging(args.verbose);
+
+    let mgr = LaunchAgentManager::default();
+
+    if args.show_all {
+        mgr.show_all()?;
+        return Ok(());
+    }
+    if args.list {
+        mgr.list_labels(false, true)?;
+        return Ok(());
+    }
+    if let Some(label) = args.remove.as_deref() {
+        mgr.remove(label)?;
+        return Ok(());
+    }
+
+    let label_path = args
+        .label_path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("A label path is required"))?;
+    if args.handler.is_empty() {
+        anyhow::bail!("An executable handler is required");
+    }
+
+    mgr.create_login(label_path, &args.handler)
+}
+src/lib.rs:
+pub mod core;
+tests/cli.rs:
+// tests/cli.rs
+
+use assert_cmd::prelude::*;
+use predicates::prelude::*;
+use std::process::Command;
+use tempfile::TempDir;
+
+fn temp_home() -> TempDir {
+    let td = TempDir::new().expect("tempdir");
+    td
+}
+
+fn set_home(cmd: &mut Command, td: &TempDir) {
+    cmd.env("HOME", td.path());
+}
+
+#[test]
+fn cronl_help_works() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    cmd.arg("--help");
+    cmd.assert().success();
+}
+
+#[test]
+fn watchl_help_works() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("watchl"));
+    cmd.arg("--help");
+    cmd.assert().success();
+}
+
+#[test]
+fn loginl_help_works() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("loginl"));
+    cmd.arg("--help");
+    cmd.assert().success();
+}
+
+#[test]
+fn cronl_list_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--list");
+    cmd.assert().success();
+}
+
+#[test]
+fn watchl_list_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("watchl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--list");
+    cmd.assert().success();
+}
+
+#[test]
+fn loginl_list_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("loginl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--list");
+    cmd.assert().success();
+}
+
+#[test]
+fn cronl_show_all_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--show-all");
+    cmd.assert().success();
+}
+
+#[test]
+fn watchl_show_all_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("watchl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--show-all");
+    cmd.assert().success();
+}
+
+#[test]
+fn loginl_show_all_works_with_empty_home() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("loginl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--show-all");
+    cmd.assert().success();
+}
+
+#[test]
+fn remove_nonexistent_plist_does_not_call_launchctl_and_exits_ok() {
+    let td = temp_home();
+
+    // cronl --remove label (no plist exists -> should early-return success)
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    set_home(&mut cmd, &td);
+
+    cmd.args(["--remove", "com.local.does-not-exist"]);
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains("Not found"));
+}
+
+#[test]
+fn show_all_prints_job_when_plist_exists() {
+    use plist::{Dictionary, Value};
+    use std::fs;
+
+    let td = temp_home();
+    let agents_dir = td
+        .path()
+        .join("Library")
+        .join("LaunchAgents");
+    fs::create_dir_all(&agents_dir).expect("create LaunchAgents dir");
+
+    // Create a single job plist
+    let label = "com.local.one";
+
+    let mut intervals = Dictionary::new();
+    intervals.insert("Minute".to_string(), Value::String("0".to_string()));
+    intervals.insert("Hour".to_string(), Value::String("1".to_string()));
+    intervals.insert("Day".to_string(), Value::String("*".to_string()));
+    intervals.insert("Month".to_string(), Value::String("*".to_string()));
+    intervals.insert("Weekday".to_string(), Value::String("*".to_string()));
+
+    let mut d = Dictionary::new();
+    d.insert("Label".to_string(), Value::String(label.to_string()));
+    d.insert(
+        "StartCalendarInterval".to_string(),
+        Value::Dictionary(intervals),
+    );
+    d.insert(
+        "ProgramArguments".to_string(),
+        Value::Array(vec![
+            Value::String("/bin/echo".to_string()),
+            Value::String("hello".to_string()),
+        ]),
+    );
+
+    let path = agents_dir.join(format!("{label}.plist"));
+    plist::to_file_xml(&path, &Value::Dictionary(d)).expect("write plist");
+
+    // Now run cronl --show-all and assert it prints the schedule + command
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    set_home(&mut cmd, &td);
+
+    cmd.arg("--show-all");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("0 1 * * * /bin/echo hello"));
+}
