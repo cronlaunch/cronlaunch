@@ -17,16 +17,18 @@ Simple command-line helpers for managing macOS LaunchAgents in a more Unix-like 
 
 ```bash
 # Create a cron job
-cronl "0 1 * * * archive.rb ${HOME}/Downloads/archive"
+cronl "0 1 * * *" -- /usr/bin/true
+cronl "0 1 * * *" -- archive.rb ${HOME}/Downloads/archive
 
 # Show all jobs
 cronl --show-all
 
 # Remove by label
+cronl --remove com.local.true
 cronl --remove com.local.archive
 
 # Watch a directory and run a handler when it changes
-watchl ~/Desktop -- ~/.local/usr/bin/desktop.rb
+watchl ~/Desktop -- ~/.local/usr/bin/desktop.sh
 
 # Watch a directory and run a handler with flags/args
 watchl ~/Downloads -- /usr/bin/python3 -m http.server 8000
@@ -56,15 +58,15 @@ Wed Jan 21 10:22:53 CST 2026
 ├── README.md
 └── src
     ├── bin
-    │   ├── cronl.rs
-    │   ├── loginl.rs
-    │   └── watchl.rs
+    │   ├── cronl.rs
+    │   ├── loginl.rs
+    │   └── watchl.rs
     ├── core
-    │   ├── constants.rs
-    │   ├── manager.rs
-    │   ├── mod.rs
-    │   ├── plist_io.rs
-    │   └── util.rs
+    │   ├── constants.rs
+    │   ├── manager.rs
+    │   ├── mod.rs
+    │   ├── plist_io.rs
+    │   └── util.rs
     └── lib.rs
 
 4 directories, 14 files

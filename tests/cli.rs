@@ -46,6 +46,15 @@ fn cronl_list_works_with_empty_home() {
 }
 
 #[test]
+fn cronl_without_arguments_lists_jobs() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cronl"));
+    set_home(&mut cmd, &td);
+
+    cmd.assert().success();
+}
+
+#[test]
 fn watchl_list_works_with_empty_home() {
     let td = temp_home();
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("watchl"));
