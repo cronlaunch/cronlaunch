@@ -1,5 +1,9 @@
 image: rust:1.96
 
+default:
+  before_script:
+    - rustup component add rustfmt clippy
+
 stages:
   - check
   - test
