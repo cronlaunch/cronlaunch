@@ -11,15 +11,13 @@ stages:
   - publish
 
 variables:
-  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  CARGO_HOME: "$CI_PROJECT_DIR/target/cargo-home"
 
 cache:
   key:
     files:
       - Cargo.lock
   paths:
-    - .cargo/registry/
-    - .cargo/git/
     - target/
 
 format:
