@@ -34,10 +34,7 @@ struct Args {
     ///
     /// This is provided separately from the handler argv so the handler can include
     /// values that would otherwise be ambiguous under simple whitespace splitting.
-    #[arg(
-        value_name = "SCHEDULE",
-        required_unless_present_any = ["show_all", "list", "remove"]
-    )]
+    #[arg(value_name = "SCHEDULE")]
     crontab: Option<String>,
 
     /// Handler program and args (must come after `--`)
@@ -48,8 +45,7 @@ struct Args {
         value_name = "HANDLER",
         num_args = 1..,
         last = true,
-        allow_hyphen_values = true,
-        required_unless_present_any = ["show_all", "list", "remove"]
+        allow_hyphen_values = true
     )]
     handler: Vec<String>,
 }
@@ -66,7 +62,7 @@ fn main() -> anyhow::Result<()> {
         mgr.show_all()?;
         return Ok(());
     }
-    if args.list {
+    if args.list || (args.crontab.is_none() && args.handler.is_empty()) {
         mgr.list_labels(false, false)?;
         return Ok(());
     }
@@ -79,6 +75,9 @@ fn main() -> anyhow::Result<()> {
         .crontab
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("A crontab definition is required"))?;
+    if args.handler.is_empty() {
+        return Err(anyhow::anyhow!("A handler is required"));
+    }
 
     // create_cron_parts is used because clap parses handler argv separately, preserving
     // exact argument boundaries and avoiding shell-like quoting issues.
