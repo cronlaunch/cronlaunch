@@ -62,12 +62,12 @@ fn main() -> anyhow::Result<()> {
         mgr.show_all()?;
         return Ok(());
     }
-    if args.list || (args.crontab.is_none() && args.handler.is_empty()) {
-        mgr.list_labels(false, false)?;
-        return Ok(());
-    }
     if let Some(label) = args.remove.as_deref() {
         mgr.remove(label)?;
+        return Ok(());
+    }
+    if args.list || (args.crontab.is_none() && args.handler.is_empty()) {
+        mgr.list_labels(false, false)?;
         return Ok(());
     }
 

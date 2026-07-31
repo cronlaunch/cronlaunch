@@ -1,0 +1,50 @@
+image: rust:1.96
+
+stages:
+  - check
+  - test
+  - package
+  - publish
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+
+cache:
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - .cargo/registry/
+    - .cargo/git/
+    - target/
+
+format:
+  stage: check
+  script:
+    - cargo fmt --check
+
+clippy:
+  stage: check
+  script:
+    - cargo clippy --locked -- -D warnings
+
+test:
+  stage: test
+  script:
+    - cargo test --locked
+
+package:
+  stage: package
+  script:
+    - cargo package --locked
+
+publish:
+  stage: publish
+  resource_group: crates-io
+  script:
+    - VERSION="$(cargo pkgid --package cronlaunch | cut -d@ -f2)"
+    - test "$CI_COMMIT_TAG" = "v$VERSION"
+    - cargo publish --locked
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && $CI_COMMIT_REF_PROTECTED == "true"'
+    - when: never

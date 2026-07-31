@@ -2,6 +2,24 @@
 
 Simple command-line helpers for managing macOS LaunchAgents in a more Unix-like way.
 
+## Install
+
+Install the latest release from crates.io:
+
+```sh
+cargo install cronlaunch --locked
+```
+
+This installs `cronl`, `watchl`, and `loginl` to Cargo's bin directory (normally
+`~/.cargo/bin`). Re-run the command to upgrade to the latest release.
+
+## Release
+
+Releases are published to crates.io by GitLab CI/CD when a protected `vX.Y.Z` tag
+matches the package version in `Cargo.toml`. Configure a masked, hidden, protected
+GitLab CI/CD variable named `CARGO_REGISTRY_TOKEN` with a crates.io API token before
+creating the first release.
+
 ## Binaries
 
 - `cronl` - create/list/remove scheduled LaunchAgents using a crontab-like string
