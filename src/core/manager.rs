@@ -4,7 +4,7 @@ use crate::core::constants::{INTERVALS, LABEL_NAMESPACE};
 use crate::core::default_runtime::DefaultRuntime;
 use crate::core::plist_io::{list_plists, parse_job};
 use crate::core::runtime::Runtime;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use plist::{Dictionary, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -411,7 +411,7 @@ impl<R: Runtime> LaunchAgentManager<R> {
 mod tests {
     use super::LaunchAgentManager;
     use crate::core::runtime::Runtime;
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
