@@ -40,16 +40,6 @@ test:
   script:
     - cargo test --all-targets --locked
 
-macos_smoke:
-  stage: test
-  tags:
-    - macos
-  script:
-    - bash tests/macos_smoke.sh
-  rules:
-    - if: '$CI_RUN_MACOS_SMOKE == "true"'
-    - when: never
-
 package:
   stage: package
   script:

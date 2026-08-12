@@ -1,6 +1,6 @@
 // src/core/plist_io.rs
 
-use crate::core::constants::{launch_agents_dir, INTERVALS, ON_LOGIN};
+use crate::core::constants::{INTERVALS, ON_LOGIN, launch_agents_dir};
 use anyhow::{Context, Result};
 use plist::{Dictionary, Value};
 use std::fs;
@@ -188,9 +188,11 @@ mod tests {
             // Restore HOME to its original value (or unset it) so other tests and
             // the process environment are not left in a modified state.
             if let Some(old) = self.old_home.take() {
-                std::env::set_var("HOME", old);
+                // ENV_LOCK prevents concurrent environment access in these tests.
+                unsafe { std::env::set_var("HOME", old) };
             } else {
-                std::env::remove_var("HOME");
+                // ENV_LOCK prevents concurrent environment access in these tests.
+                unsafe { std::env::remove_var("HOME") };
             }
             // TempDir cleans itself up here too.
         }
@@ -203,7 +205,8 @@ mod tests {
         let old_home = std::env::var_os("HOME");
 
         // Redirect launch_agents_dir() to a temporary directory for isolated filesystem tests.
-        std::env::set_var("HOME", td.path());
+        // ENV_LOCK prevents concurrent environment access in these tests.
+        unsafe { std::env::set_var("HOME", td.path()) };
 
         HomeGuard {
             _lock: lock,
@@ -344,8 +347,10 @@ mod tests {
                 .map(|n| n.to_string_lossy() == "com.local.one.plist")
                 .unwrap_or(false)
         }));
-        assert!(!plists
-            .iter()
-            .any(|p| p.file_name().unwrap() == "not_a_plist.txt"));
+        assert!(
+            !plists
+                .iter()
+                .any(|p| p.file_name().unwrap() == "not_a_plist.txt")
+        );
     }
 }

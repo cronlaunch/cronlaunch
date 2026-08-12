@@ -22,8 +22,8 @@ require macOS and will not operate elsewhere.
 Releases are published to crates.io by GitLab CI/CD when a protected `vX.Y.Z` tag
 matches the package version in `Cargo.toml`. Configure a masked, hidden, protected
 GitLab CI/CD variable named `CARGO_REGISTRY_TOKEN` with a crates.io API token before
-creating the first release. Set `CI_RUN_MACOS_SMOKE=true` to run the launchctl smoke
-test on a GitLab macOS runner tagged `macos` before publishing.
+creating the first release. Before publishing, run `bash tests/macos_smoke.sh` locally
+on a Mac in a logged-in GUI session.
 
 ## Binaries
 

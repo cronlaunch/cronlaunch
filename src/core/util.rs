@@ -1,6 +1,6 @@
 // src/core/util.rs
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use libc::geteuid;
 use log::LevelFilter;
 use std::path::{Path, PathBuf};
