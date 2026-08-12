@@ -7,6 +7,11 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
+if ! command -v rustup >/dev/null; then
+    echo "macOS smoke test requires Rust installed through rustup" >&2
+    exit 1
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmpdir="$(mktemp -d)"
 label="com.local.cronlaunch-smoke-$$"
@@ -28,7 +33,8 @@ EOF
 chmod 755 "$handler"
 touch "$label_hint"
 
-cargo build --bin loginl --locked --manifest-path "$repo_root/Cargo.toml"
+# Invoke Cargo through rustup so Cargo and rustc always come from one toolchain.
+rustup run stable cargo build --bin loginl --locked --manifest-path "$repo_root/Cargo.toml"
 HOME="$tmpdir" "$binary" "$label_hint" -- "$handler"
 
 plist="$tmpdir/Library/LaunchAgents/$label.plist"
