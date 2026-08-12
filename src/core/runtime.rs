@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// - Centralize platform-specific behavior (user id, filesystem paths, process launching).
 /// - Keep the manager focused on LaunchAgent plist composition rather than I/O details.
 pub trait Runtime: Send + Sync {
-    /// Return the effective user id to target for launchctl "gui/<uid>" domains.
+    /// Return the effective user id to target for launchctl `gui/<uid>` domains.
     ///
     /// Effective uid is used because launchctl operations are scoped to the login session
     /// associated with that uid, and sudo contexts often require explicitly targeting it.

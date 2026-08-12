@@ -13,9 +13,9 @@ Thanks for contributing! This project provides a small set of Rust binaries for 
 ## Project layout
 
 - `src/lib.rs`: shared LaunchAgent logic (plist creation, load/unload, etc.)
-- `src/bin/cron.rs`: crontab-like scheduling (`StartCalendarInterval`)
-- `src/bin/watch.rs`: filesystem path watching (`WatchPaths`)
-- `src/bin/onlogin.rs`: run at onlogin (`RunAtLoad`)
+- `src/bin/cronl.rs`: crontab-like scheduling (`StartCalendarInterval`)
+- `src/bin/watchl.rs`: filesystem path watching (`WatchPaths`)
+- `src/bin/loginl.rs`: run at login (`RunAtLoad`)
 
 ## Setup
 
@@ -68,19 +68,19 @@ cargo run --bin loginl -- --help
 Example (cron job):
 
 ```bash
-cargo run --bin cronl -- -e "0 * * * *" /usr/bin/true
+cargo run --bin cronl -- "0 * * * *" -- /usr/bin/true
 ```
 
 Example (watch a directory):
 
 ```bash
-cargo run --bin watchl -- -w "$HOME/Downloads" /usr/bin/true
+cargo run --bin watchl -- "$HOME/Downloads" -- /usr/bin/true
 ```
 
 Example (run at onlogin):
 
 ```bash
-cargo run --bin loginl -- /usr/bin/true
+cargo run --bin loginl -- "$HOME/bin/my-job" -- /usr/bin/true
 ```
 
 ## Tests

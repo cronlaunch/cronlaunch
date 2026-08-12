@@ -105,8 +105,27 @@ fn parse_calendar_interval(schedule: &str) -> Result<Value> {
         ));
     }
 
-    for (k, v) in INTERVALS.iter().zip(fields.iter()) {
-        interval_dict.insert((*k).to_string(), Value::String((*v).to_string()));
+    for (key, value) in INTERVALS.iter().zip(fields.iter()) {
+        if *value == "*" {
+            continue;
+        }
+
+        let number: i64 = value.parse().with_context(|| {
+            format!("Invalid {key} value {value:?}: expected an integer or \"*\"")
+        })?;
+        let valid = match *key {
+            "Minute" => (0..=59).contains(&number),
+            "Hour" => (0..=23).contains(&number),
+            "Day" => (1..=31).contains(&number),
+            "Month" => (1..=12).contains(&number),
+            "Weekday" => (0..=7).contains(&number),
+            _ => unreachable!("INTERVALS contains only supported launchd keys"),
+        };
+        if !valid {
+            return Err(anyhow!("Invalid {key} value {number}"));
+        }
+
+        interval_dict.insert((*key).to_string(), Value::Integer(number.into()));
     }
 
     Ok(Value::Dictionary(interval_dict))
@@ -141,9 +160,15 @@ impl<R: Runtime> LaunchAgentManager<R> {
     ///
     /// Jobs are derived from plist files found in the LaunchAgents directory.
     /// A job with an empty command is treated as disabled and printed with "@disabled".
-    pub fn show_all(&self) -> Result<()> {
+    pub fn show_all(&self, filter_watchers_only: bool, filter_login_only: bool) -> Result<()> {
         for p in list_plists()? {
             let job = parse_job(&p)?;
+            if filter_watchers_only && job.watch_paths.is_empty() {
+                continue;
+            }
+            if filter_login_only && !job.is_login {
+                continue;
+            }
             if job.command.trim().is_empty() {
                 println!("@disabled {}", p.display());
             } else {
@@ -393,10 +418,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
+    type CommandLog = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
     #[derive(Clone)]
     struct FakeRuntime {
         dir: PathBuf,
-        commands: Arc<Mutex<Vec<(String, Vec<String>)>>>,
+        commands: CommandLog,
         which_map: Arc<HashMap<String, PathBuf>>,
     }
 
@@ -492,8 +519,37 @@ mod tests {
         let cmds = rt.commands.lock().unwrap().clone();
         assert!(cmds.iter().any(|(p, a)| {
             p == "launchctl"
-                && a.get(0).map(|s| s.as_str()) == Some("bootstrap")
+                && a.first().map(String::as_str) == Some("bootstrap")
                 && a.iter().any(|x| x.contains("gui/"))
         }));
+
+        let plist = plist::Value::from_file(plist_path).unwrap();
+        let intervals = plist
+            .as_dictionary()
+            .and_then(|root| root.get("StartCalendarInterval"))
+            .and_then(plist::Value::as_dictionary)
+            .unwrap();
+        assert_eq!(
+            intervals.get("Minute"),
+            Some(&plist::Value::Integer(0.into()))
+        );
+        assert_eq!(
+            intervals.get("Hour"),
+            Some(&plist::Value::Integer(1.into()))
+        );
+        assert!(!intervals.contains_key("Day"));
+        assert!(!intervals.contains_key("Month"));
+        assert!(!intervals.contains_key("Weekday"));
+    }
+
+    #[test]
+    fn create_cron_rejects_invalid_calendar_values() {
+        let td = TempDir::new().unwrap();
+        let exe = make_exe(&td, "handler");
+        let mgr = LaunchAgentManager::new(FakeRuntime::new(td.path().join("LaunchAgents")));
+        let handler = vec![exe.to_string_lossy().to_string()];
+
+        let err = mgr.create_cron_parts("60 * * * *", &handler).unwrap_err();
+        assert!(err.to_string().contains("Invalid Minute value 60"));
     }
 }

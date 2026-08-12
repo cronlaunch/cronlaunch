@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
     let mgr = LaunchAgentManager::default();
 
     if args.show_all {
-        mgr.show_all()?;
+        mgr.show_all(false, true)?;
         return Ok(());
     }
     if args.list {
