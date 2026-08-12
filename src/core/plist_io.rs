@@ -233,11 +233,8 @@ mod tests {
         let _home = set_temp_home();
 
         let mut intervals = Dictionary::new();
-        intervals.insert("Minute".to_string(), Value::String("0".to_string()));
-        intervals.insert("Hour".to_string(), Value::String("1".to_string()));
-        intervals.insert("Day".to_string(), Value::String("*".to_string()));
-        intervals.insert("Month".to_string(), Value::String("*".to_string()));
-        intervals.insert("Weekday".to_string(), Value::String("*".to_string()));
+        intervals.insert("Minute".to_string(), Value::Integer(0.into()));
+        intervals.insert("Hour".to_string(), Value::Integer(1.into()));
 
         let mut d = Dictionary::new();
         d.insert(

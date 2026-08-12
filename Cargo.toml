@@ -2,6 +2,7 @@
 name = "cronlaunch"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.85"
 license = "MIT"
 description = "Simplified LaunchAgents management for macOS using crontab-like syntax."
 authors = ["Nels Nelson <nels@nelsnelson.org>"]
@@ -43,4 +44,3 @@ path = "src/bin/watchl.rs"
 [[bin]]
 name = "loginl"
 path = "src/bin/loginl.rs"
-

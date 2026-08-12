@@ -28,12 +28,27 @@ format:
 clippy:
   stage: check
   script:
-    - cargo clippy --locked -- -D warnings
+    - cargo clippy --all-targets --all-features --locked -- -D warnings
+
+docs:
+  stage: check
+  script:
+    - RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
 test:
   stage: test
   script:
-    - cargo test --locked
+    - cargo test --all-targets --locked
+
+macos_smoke:
+  stage: test
+  tags:
+    - macos
+  script:
+    - bash tests/macos_smoke.sh
+  rules:
+    - if: '$CI_RUN_MACOS_SMOKE == "true"'
+    - when: never
 
 package:
   stage: package
@@ -44,7 +59,8 @@ publish:
   stage: publish
   resource_group: crates-io
   script:
-    - VERSION="$(cargo pkgid --package cronlaunch | cut -d@ -f2)"
+    - PACKAGE_ID="$(cargo pkgid --package cronlaunch)"
+    - VERSION="${PACKAGE_ID##*#}"
     - test "$CI_COMMIT_TAG" = "v$VERSION"
     - cargo publish --locked
   rules:

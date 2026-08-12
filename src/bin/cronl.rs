@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
     // Subcommands are modeled as flags for a small surface area CLI; early returns
     // keep control flow straightforward and avoid partially-initialized state.
     if args.show_all {
-        mgr.show_all()?;
+        mgr.show_all(false, false)?;
         return Ok(());
     }
     if let Some(label) = args.remove.as_deref() {

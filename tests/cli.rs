@@ -8,8 +8,7 @@ use tempfile::TempDir;
 fn temp_home() -> TempDir {
     // Many tests rely on LaunchAgents directory behavior, which is derived from HOME.
     // Using a TempDir allows isolating side effects and prevents writing into a real user profile.
-    let td = TempDir::new().expect("tempdir");
-    td
+    TempDir::new().expect("tempdir")
 }
 
 fn set_home(cmd: &mut Command, td: &TempDir) {
@@ -151,11 +150,8 @@ fn show_all_prints_job_when_plist_exists() {
     let label = "com.local.one";
 
     let mut intervals = Dictionary::new();
-    intervals.insert("Minute".to_string(), Value::String("0".to_string()));
-    intervals.insert("Hour".to_string(), Value::String("1".to_string()));
-    intervals.insert("Day".to_string(), Value::String("*".to_string()));
-    intervals.insert("Month".to_string(), Value::String("*".to_string()));
-    intervals.insert("Weekday".to_string(), Value::String("*".to_string()));
+    intervals.insert("Minute".to_string(), Value::Integer(0.into()));
+    intervals.insert("Hour".to_string(), Value::Integer(1.into()));
 
     let mut d = Dictionary::new();
     d.insert("Label".to_string(), Value::String(label.to_string()));
