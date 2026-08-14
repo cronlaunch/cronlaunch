@@ -37,8 +37,7 @@ struct Args {
     /// This is parsed as PathBuf so filesystem validation can occur before plist creation.
     #[arg(
         value_name = "WATCH_PATH",
-        num_args = 1..,
-        required_unless_present_any = ["show_all", "list", "remove"]
+        num_args = 1..
     )]
     watch_path: Vec<PathBuf>,
 
@@ -50,8 +49,7 @@ struct Args {
         value_name = "HANDLER",
         num_args = 1..,
         last = true,
-        allow_hyphen_values = true,
-        required_unless_present_any = ["show_all", "list", "remove"]
+        allow_hyphen_values = true
     )]
     handler: Vec<String>,
 }
@@ -66,7 +64,7 @@ fn main() -> anyhow::Result<()> {
         mgr.show_all(true, false)?;
         return Ok(());
     }
-    if args.list {
+    if args.list || (args.watch_path.is_empty() && args.handler.is_empty()) {
         // Restrict listing to WatchPaths jobs so output matches the binary's purpose.
         mgr.list_labels(true, false)?;
         return Ok(());

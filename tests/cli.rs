@@ -75,6 +75,15 @@ fn watchl_list_works_with_empty_home() {
 }
 
 #[test]
+fn watchl_without_arguments_lists_jobs() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("watchl"));
+    set_home(&mut cmd, &td);
+
+    cmd.assert().success();
+}
+
+#[test]
 fn loginl_list_works_with_empty_home() {
     // Same behavior is expected across binaries; each should tolerate a fresh HOME.
     let td = temp_home();
@@ -82,6 +91,15 @@ fn loginl_list_works_with_empty_home() {
     set_home(&mut cmd, &td);
 
     cmd.arg("--list");
+    cmd.assert().success();
+}
+
+#[test]
+fn loginl_without_arguments_lists_jobs() {
+    let td = temp_home();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("loginl"));
+    set_home(&mut cmd, &td);
+
     cmd.assert().success();
 }
 
