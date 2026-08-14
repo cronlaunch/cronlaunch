@@ -34,10 +34,7 @@ struct Args {
     /// A path used only to derive the label (positional)
     ///
     /// This allows stable label generation without forcing the label to match the handler path.
-    #[arg(
-        value_name = "LABEL_PATH",
-        required_unless_present_any = ["show_all", "list", "remove"]
-    )]
+    #[arg(value_name = "LABEL_PATH")]
     label_path: Option<PathBuf>,
 
     /// Handler program and args (positional, recommended after `--`)
@@ -47,8 +44,7 @@ struct Args {
         value_name = "HANDLER",
         num_args = 1..,
         last = true,
-        allow_hyphen_values = true,
-        required_unless_present_any = ["show_all", "list", "remove"]
+        allow_hyphen_values = true
     )]
     handler: Vec<String>,
 }
@@ -63,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         mgr.show_all(false, true)?;
         return Ok(());
     }
-    if args.list {
+    if args.list || (args.label_path.is_none() && args.handler.is_empty()) {
         // Restrict listing to RunAtLoad jobs so output matches the binary's purpose.
         mgr.list_labels(false, true)?;
         return Ok(());
